@@ -1,0 +1,73 @@
+stages:
+  - ssg
+
+default:
+  image:
+    name: debian:11
+    pull_policy: if-not-present
+  tags:
+    - docker
+
+update_ssg:
+  stage: ssg
+  variables:
+    # Variables to run a test scan
+    debian_datastream_id: "scap_org.open-scap_datastream_from_xccdf_ssg-debian11-xccdf.xml"
+    debian_xccdf_id: "scap_org.open-scap_cref_ssg-debian11-xccdf.xml"
+    debian_profile: "xccdf_org.ssgproject.content_profile_anssi_np_nt28_average"
+  script:
+    # Check if new version of SSG is available
+    - apt update
+    - apt install -y curl git
+    - ssg_version=$(curl --silent "https://api.github.com/repos/ComplianceAsCode/content/releases/latest" | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/')
+    - current_ssg_version=$(git -c 'versionsort.suffix=-' ls-remote --refs --sort='version:refname' --tags https://oauth2:$SSG_ACCESS_TOKEN@gitlab.example.com/root/ssg.git '*.*.*' | tail --lines=1 | cut --delimiter='/' --fields=3 | sed -E "s/v//")
+    - 'if [ "$ssg_version" == "$current_ssg_version" ]; then
+      echo "No new version of SSG is available: $ssg_version";
+      exit 0;
+      fi'
+    - 'echo "New version of SSG is available: $ssg_version"'
+
+    # Check if new version of OpenSCAP is available
+    - openscap_version=$(curl --silent "https://api.github.com/repos/OpenSCAP/openscap/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    - current_oscap_version=$(git -c 'versionsort.suffix=-' ls-remote --refs --sort='version:refname' --tags https://oauth2:$OSCAP_ACCESS_TOKEN@gitlab.example.com/root/oscap.git '*.*.*' | tail --lines=1 | cut --delimiter='/' --fields=3 | sed -E "s/v//")
+    - 'if [ "$openscap_version" != "$current_oscap_version" ]; then
+      echo "New version of OpenSCAP is available: $openscap_version.";
+      echo "Update before building SSG.";
+      exit 1;
+      fi'
+
+    # Install SSG dependencies
+    - apt install -y bzip2 cmake python3-pip libxml2-utils ninja-build xsltproc expat
+    - pip install jinja2 pyyaml pytest pytest-cov json2html yamlpath mypy openpyxl pandas cmakelint sphinx sphinxcontrib-jinjadomain sphinx_rtd_theme myst_parser
+
+    # Install OpenSCAP
+    - git clone -b "v${openscap_version}" --depth 1 https://oauth2:$OSCAP_ACCESS_TOKEN@gitlab.example.com/root/oscap.git
+    - apt install -fy ./oscap/oscap_${openscap_version}.deb
+
+    # Download SSG content
+    - ssg_url="https://github.com/ComplianceAsCode/content/releases/download/v$ssg_version/scap-security-guide-$ssg_version.tar.bz2"
+    - curl -so /tmp/scap-security-guide-$ssg_version.tar.bz2 -L "$ssg_url"
+    - tar -xjf /tmp/scap-security-guide-$ssg_version.tar.bz2 -C /tmp
+
+    # Build SSG
+    - mkdir -p /tmp/scap-security-guide-$ssg_version/build
+    - cmake -S /tmp/scap-security-guide-$ssg_version -B /tmp/scap-security-guide-$ssg_version/build
+    - make -C /tmp/scap-security-guide-$ssg_version/build -j4 debian11
+    - mkdir -p /tmp/debian11/
+    - cp /tmp/scap-security-guide-$ssg_version/build/ssg-debian11* /tmp/debian11/
+
+    # Test Scan
+    - oscap xccdf eval --datastream-id ${debian_datastream_id} --xccdf-id ${debian_xccdf_id} --profile ${debian_profile} /tmp/debian11/ssg-debian11-ds.xml || [[ $? == 2 ]]
+
+    # Push new version of SSG to GitLab
+    - cd /tmp
+    - git init
+    - git remote add origin https://oauth2:$SSG_ACCESS_TOKEN@gitlab.example.com/root/ssg.git
+    - git config user.email "ci-bot@gitlab.example.com"
+    - git config user.name "ci-bot"
+
+    - git add debian11/*
+    - git commit -m "Update SSG to version $ssg_version"
+    - git tag -a "v$ssg_version" -m "Update SSG to version $ssg_version"
+    - git push origin v$ssg_version
+  when: manual

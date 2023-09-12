@@ -1,0 +1,29 @@
+- name: Copy SCAP content for ubuntu
+  copy:
+    src: "{{ item }}"
+    dest: "/tmp/"
+    mode: 0644
+  with_fileglob:
+    - "/usr/local/share/xml/scap/ssg/content/ssg-ubuntu*"
+
+- name: Run OpenSCAP scan
+  become: true
+  vars:
+    datastream_id: "scap_org.open-scap_datastream_from_xccdf_ssg-ubuntu2204-xccdf.xml"
+    xccdf_id: "scap_org.open-scap_cref_ssg-ubuntu2204-xccdf.xml"
+    profile: "xccdf_org.ssgproject.content_profile_standard"
+    datastream_path: "/tmp/ssg-ubuntu2204-ds.xml"
+  shell: "oscap xccdf eval --datastream-id {{ datastream_id }} --xccdf-id {{ xccdf_id }} --profile {{ profile }} --oval-results --results /tmp/xccdf-results.xml --results-arf /tmp/arf.xml --report /tmp/report.html {{ datastream_path }}"
+  register: result
+  failed_when: ( result.rc not in [ 0, 2 ] )
+
+- name: Download report files
+  fetch:
+    src: "{{ item }}"
+    dest: "reports/{{ inventory_hostname }}/"
+    flat: yes
+  with_items:
+    - "/tmp/xccdf-results.xml"
+    - "/tmp/arf.xml"
+    - "/tmp/report.html"
+  when: result.rc in [ 0, 2 ]

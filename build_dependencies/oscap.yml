@@ -1,0 +1,74 @@
+stages:
+  - oscap
+
+default:
+  image:
+    name: debian:11
+    pull_policy: if-not-present
+  tags:
+    - docker
+
+update_oscap:
+  stage: oscap
+  script:
+    # Check if new version of OpenSCAP is available
+    - apt update
+    - apt install -y curl git
+    - openscap_version=$(curl --silent "https://api.github.com/repos/OpenSCAP/openscap/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    - current_oscap_version=$(git -c 'versionsort.suffix=-' ls-remote --refs --sort='version:refname' --tags https://oauth2:$OSCAP_ACCESS_TOKEN@gitlab.example.com/root/oscap.git '*.*.*' | tail --lines=1 | cut --delimiter='/' --fields=3 | sed -E "s/v//")
+    - 'if [ "$openscap_version" == "$current_oscap_version" ]; then
+      echo "No new version of OpenSCAP is available. Current version: $current_oscap_version";
+      exit 0;
+      fi'
+    - 'echo "New version of OpenSCAP is available: $openscap_version"'
+
+    # Install build dependencies
+    - apt install -y bzip2 cmake python3-pip libxml2-utils ninja-build xsltproc cmake libdbus-1-dev libdbus-glib-1-dev libcurl4-openssl-dev libgcrypt20-dev libselinux1-dev libxslt1-dev libgconf2-dev libacl1-dev libblkid-dev libcap-dev libxml2-dev libldap2-dev libpcre3-dev python3-dev swig libxml-parser-perl libxml-xpath-perl libperl-dev libbz2-dev librpm-dev g++ libapt-pkg-dev libyaml-dev libxmlsec1-dev libxmlsec1-openssl
+
+    # Download OpenSCAP source code
+    - openscap_url="https://github.com/OpenSCAP/openscap/releases/download/${openscap_version}/openscap-${openscap_version}.tar.gz"
+    - curl -so /tmp/openscap-${openscap_version}.tar.gz -L "$openscap_url"
+    - tar -xzpf /tmp/openscap-${openscap_version}.tar.gz -C /tmp
+
+    # Build OpenSCAP
+    - mkdir -p /tmp/openscap-${openscap_version}/build
+    - cmake -DCMAKE_INSTALL_PREFIX=/usr -S /tmp/openscap-${openscap_version} -B /tmp/openscap-${openscap_version}/build
+    - make -C /tmp/openscap-${openscap_version}/build install
+
+    # Create deb package
+    - mkdir -p /tmp/oscap_${openscap_version}/DEBIAN
+    - 'printf "Package: oscap\nVersion: ${openscap_version}\nArchitecture: amd64\nDepends: libxml2, libxslt1-dev, libxmlsec1, libxmlsec1-openssl, libcurl4-openssl-dev, librpm-dev, libgconf2-dev, libyaml-dev\n" > /tmp/oscap_${openscap_version}/DEBIAN/control'
+
+    - mkdir -p /tmp/oscap_${openscap_version}/usr/bin
+    - cp /tmp/openscap-${openscap_version}/build/utils/oscap /tmp/oscap_${openscap_version}/usr/bin
+
+    - mkdir -p /tmp/oscap_${openscap_version}/usr/lib
+    - cp /tmp/openscap-${openscap_version}/build/src/libopenscap.so.25 /tmp/oscap_${openscap_version}/usr/lib
+    - cp /tmp/openscap-${openscap_version}/build/src/SCE/libopenscap_sce.so.25 /tmp/oscap_${openscap_version}/usr/lib
+
+    - mkdir -p /tmp/oscap_${openscap_version}/usr/include/openscap
+    - cp -r /usr/include/openscap/ /tmp/oscap_${openscap_version}/usr/include/
+
+    - mkdir -p /tmp/oscap_${openscap_version}/usr/share/openscap
+    - cp -r /usr/share/openscap/ /tmp/oscap_${openscap_version}/usr/share/
+
+    - mkdir -p /tmp/oscap_${openscap_version}/usr/share/man/man8/
+    - cp /usr/share/man/man8/oscap.8 /tmp/oscap_${openscap_version}/usr/share/man/man8/
+    - dpkg-deb --build /tmp/oscap_${openscap_version}
+
+    # Test deb package
+    - apt install -fy /tmp/oscap_${openscap_version}.deb
+    - oscap --version
+
+    # Push deb package to GitLab
+    - cd /tmp
+    - git init
+    - git remote add origin https://oauth2:$OSCAP_ACCESS_TOKEN@gitlab.example.com/root/oscap.git
+    - git config user.email "ci-bot@gitlab.example.com"
+    - git config user.name "ci-bot"
+
+    - git add oscap_${openscap_version}.deb
+    - git commit -m "Update oscap to version ${openscap_version}"
+    - git tag -a "v${openscap_version}" -m "Update oscap to version ${openscap_version}"
+    - git push origin v${openscap_version}
+  when: manual

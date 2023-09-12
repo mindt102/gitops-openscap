@@ -1,0 +1,24 @@
+- name: Copy SCAP content for debian
+  copy:
+    src: "{{ item }}"
+    dest: "/tmp/"
+    mode: 0644
+  with_fileglob:
+    - "/tmp/ssg/debian11/*"
+
+- name: Run OpenSCAP scan
+  become: true
+  shell: "oscap xccdf eval --datastream-id {{ debian.datastream_id }} --xccdf-id {{ debian.xccdf_id }} --profile {{ debian.profile }} --oval-results --results /tmp/xccdf-results.xml --results-arf /tmp/arf.xml --report /tmp/report.html {{ debian.datastream_path }}"
+  register: result
+  failed_when: ( result.rc not in [ 0, 2 ] )
+
+- name: Download report files
+  fetch:
+    src: "{{ item }}"
+    dest: "{{ lookup('env', 'PWD') }}/reports/{{ inventory_hostname }}/"
+    flat: yes
+  with_items:
+    - "/tmp/xccdf-results.xml"
+    - "/tmp/arf.xml"
+    - "/tmp/report.html"
+  when: result.rc in [ 0, 2 ]

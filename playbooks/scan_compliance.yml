@@ -1,0 +1,15 @@
+- name: Manage VMs
+  hosts: all
+  roles:
+    - role: "openscap"
+      vars:
+        debian:
+          datastream_id: "scap_org.open-scap_datastream_from_xccdf_ssg-debian11-xccdf.xml"
+          xccdf_id: "scap_org.open-scap_cref_ssg-debian11-xccdf.xml"
+          profile: "xccdf_org.ssgproject.content_profile_anssi_np_nt28_average"
+          datastream_path: "/tmp/ssg-debian11-ds.xml"
+        ubuntu:
+          datastream_id: "scap_org.open-scap_datastream_from_xccdf_ssg-ubuntu2204-xccdf.xml"
+          xccdf_id: "scap_org.open-scap_cref_ssg-ubuntu2204-xccdf.xml"
+          profile: "xccdf_org.ssgproject.content_profile_standard"
+          datastream_path: "/tmp/ssg-ubuntu2204-ds.xml"

@@ -1,0 +1,66 @@
+variables:
+  # To optimize CI/CD time
+  GIT_DEPTH: 10
+  # To avoid SSL certificate verification error when cloning private repositories
+  GIT_SSL_NO_VERIFY: 1
+
+stages:
+  - oscap
+  - ssg
+  - scan
+
+default:
+  image:
+    name: debian:11
+    # To avoid downloading the image every time the pipeline is run
+    pull_policy: if-not-present
+  tags:
+    - docker
+
+.setup_ansible:
+  before_script:
+    - mkdir -p /etc/ansible/
+    - cp -f "$ANSIBLE_CFG" /etc/ansible/ansible.cfg
+
+include:
+  - local: build_dependencies/oscap.yml
+  - local: build_dependencies/ssg.yml
+
+run-security-scan:
+  image:
+    name: theohbrothers/docker-ansible:v2.10.7-alpine-3.13
+    pull_policy: if-not-present
+  stage: scan
+  extends: .setup_ansible
+  script:
+    - apk update
+    - apk add curl git
+
+    # Check for oscap version
+    - openscap_version=$(curl --silent "https://api.github.com/repos/OpenSCAP/openscap/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    - current_oscap_version=$(git -c 'versionsort.suffix=-' ls-remote --refs --sort='version:refname' --tags https://oauth2:$OSCAP_ACCESS_TOKEN@gitlab.example.com/root/oscap.git '*.*.*' | tail -n 1 | cut -d '/' -f 3 | sed -E "s/v//")
+    - 'if [ "$openscap_version" != "$current_oscap_version" ]; then
+      echo "New version of OpenSCAP is available: $openscap_version.";
+      echo "Update before scanning";
+      exit 1;
+      fi'
+
+    # Check for ssg version
+    - ssg_version=$(curl --silent "https://api.github.com/repos/ComplianceAsCode/content/releases/latest" | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/')
+    - current_ssg_version=$(git -c 'versionsort.suffix=-' ls-remote --refs --sort='version:refname' --tags https://oauth2:$SSG_ACCESS_TOKEN@gitlab.example.com/root/ssg.git '*.*.*' | tail -n 1 | cut -d '/' -f 3 | sed -E "s/v//")
+    - 'if [ "$ssg_version" != "$current_ssg_version" ]; then
+      echo "New version of SSG is available: $ssg_version.";
+      echo "Update before scanning";
+      exit 1;
+      fi'
+
+    # Download the latest version of OpenSCAP and SSG
+    - git clone -b "v${openscap_version}" --depth 1 https://oauth2:$OSCAP_ACCESS_TOKEN@gitlab.example.com/root/oscap.git /tmp/oscap
+    - git clone -b "v${ssg_version}" --depth 1 https://oauth2:$SSG_ACCESS_TOKEN@gitlab.example.com/root/ssg.git /tmp/ssg
+
+    # Run the security scan
+    - ansible-playbook -i $ANSIBLE_INVENTORY --private-key "$SSH_PRIVATE_KEY" playbooks/scan_compliance.yml --extra-vars "oscap_version=${openscap_version}"
+  when: manual
+  artifacts:
+    paths:
+      - "reports/"

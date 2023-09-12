@@ -1,0 +1,11 @@
+- name: Copy oscap debian package
+  copy:
+    src: "/tmp/oscap/oscap_{{ oscap_version }}.deb"
+    dest: "/tmp/"
+    mode: 0644
+
+- name: Install oscap debian package
+  become: true
+  apt:
+    deb: "/tmp/oscap_{{ oscap_version }}.deb"
+    update_cache: true

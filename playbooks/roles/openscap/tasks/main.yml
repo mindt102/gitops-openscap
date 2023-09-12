@@ -1,0 +1,23 @@
+- name: Check if OpenSCAP is installed
+  stat:
+    path: /usr/bin/oscap
+  register: openscap_installed
+
+- name: Check if oscap is up-to-date
+  shell: "oscap --version | grep {{ oscap_version }}"
+  register: oscap_version_check
+  when: openscap_installed.stat.exists
+  failed_when: oscap_version_check.rc not in [ 0, 1 ]
+
+- name: Debug
+  debug:
+    msg: "OpenSCAP is not installed or up-to-date"
+  when: (not openscap_installed.stat.exists) or (oscap_version_check.rc == 1)
+
+- name: Install OpenSCAP
+  import_tasks: install.yml
+  when: (not openscap_installed.stat.exists) or (oscap_version_check.rc == 1)
+
+- name: Run OpenSCAP scan for debian
+  import_tasks: debian-scan.yml
+  when: ansible_distribution == "Debian"
